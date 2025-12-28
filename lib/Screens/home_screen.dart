@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import 'package:mywaguri/Utils/constants.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mywaguri/Screens/Login/login_page.dart';
+import 'package:mywaguri/Screens/profile_detail_screen.dart';
+import 'package:mywaguri/Services/notification_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -116,6 +118,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _showSuccessDialog("Berhasil Absen Masuk",
           "Selamat bekerja! Data tersimpan di Firebase.");
+      NotificationService.showLocalNotification("Absen Masuk Berhasil",
+          "Selamat bekerja! Anda masuk pada pukul $timeNow");
     } catch (e) {
       _showSnackBar("Gagal simpan data: $e");
     }
@@ -144,6 +148,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _showSuccessDialog("Berhasil Absen Pulang",
           "Data pulang tersimpan. Hati-hati di jalan!");
+      NotificationService.showLocalNotification("Absen Pulang Berhasil",
+          "Hati-hati di jalan! Anda pulang pada pukul $timeNow");
     } catch (e) {
       _showSnackBar("Gagal update data: $e");
     }
@@ -263,6 +269,8 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       _showSuccessDialog(
           "Pengajuan Terkirim", "Data $type Anda telah tercatat.");
+      NotificationService.showLocalNotification("Pengajuan $type Terkirim",
+          "Data $type Anda telah tercatat pada pukul ${DateFormat('HH:mm').format(DateTime.now())}");
     } catch (e) {
       _showSnackBar("Gagal kirim izin: $e");
     }
@@ -443,9 +451,39 @@ class _HomeScreenState extends State<HomeScreen> {
           Text("Senior Developer",
               style: GoogleFonts.poppins(color: mSubtitleColor)),
           const SizedBox(height: 40),
-          _buildProfileMenu(Icons.person_outline, "Informasi Pribadi"),
-          _buildProfileMenu(Icons.settings_outlined, "Pengaturan"),
-          _buildProfileMenu(Icons.help_outline, "Pusat Bantuan"),
+          _buildProfileMenu(Icons.person_outline, "Informasi Pribadi", () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ProfileDetailScreen(
+                  title: "Informasi Pribadi",
+                  type: "personal",
+                ),
+              ),
+            );
+          }),
+          _buildProfileMenu(Icons.settings_outlined, "Pengaturan", () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ProfileDetailScreen(
+                  title: "Pengaturan",
+                  type: "settings",
+                ),
+              ),
+            );
+          }),
+          _buildProfileMenu(Icons.help_outline, "Pusat Bantuan", () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ProfileDetailScreen(
+                  title: "Pusat Bantuan",
+                  type: "help",
+                ),
+              ),
+            );
+          }),
           const SizedBox(height: 40),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -693,12 +731,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildProfileMenu(IconData icon, String title) {
+  Widget _buildProfileMenu(IconData icon, String title, VoidCallback onTap) {
     return ListTile(
       leading: Icon(icon, color: kPrimaryColor),
       title: Text(title, style: GoogleFonts.poppins()),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () {},
+      onTap: onTap,
     );
   }
 
