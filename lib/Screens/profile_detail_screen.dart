@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mywaguri/Utils/constants.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:mywaguri/main.dart';
 
 class ProfileDetailScreen extends StatefulWidget {
   final String title;
@@ -80,18 +83,57 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
   }
 
   Widget _buildPersonalContent() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          _buildInfoItem(Icons.badge_outlined, "Nama Lengkap", "Fauzi"),
-          _buildInfoItem(Icons.email_outlined, "Email", "admin@gmail.com"),
-          _buildInfoItem(Icons.phone_android_outlined, "Nomor Telepon",
-              "+62 858-6193-0794"),
-          _buildInfoItem(Icons.work_outline, "Jabatan", "Senior Developer"),
-          _buildInfoItem(Icons.location_on, "Alamat", "Jatinagara, Ciamis"),
-        ],
-      ),
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const Center(child: Text("Silakan login kembali"));
+
+    return FutureBuilder<DocumentSnapshot>(
+      future:
+          FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+              child: CircularProgressIndicator(color: kPrimaryColor));
+        }
+
+        if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
+          // Fallback jika data di Firestore belum ada (user lama/error)
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                _buildInfoItem(Icons.badge_outlined, "Nama Lengkap",
+                    user.displayName ?? "User"),
+                _buildInfoItem(
+                    Icons.email_outlined, "Email", user.email ?? "-"),
+                _buildInfoItem(
+                    Icons.phone_android_outlined, "Nomor Telepon", "-"),
+                _buildInfoItem(Icons.work_outline, "Jabatan", "Karyawan"),
+                _buildInfoItem(Icons.location_on, "Alamat", "-"),
+              ],
+            ),
+          );
+        }
+
+        var userData = snapshot.data!.data() as Map<String, dynamic>;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              _buildInfoItem(Icons.badge_outlined, "Nama Lengkap",
+                  userData['nama'] ?? user.displayName ?? "User"),
+              _buildInfoItem(Icons.email_outlined, "Email",
+                  userData['email'] ?? user.email ?? "-"),
+              _buildInfoItem(Icons.phone_android_outlined, "Nomor Telepon",
+                  userData['phone'] ?? "-"),
+              _buildInfoItem(Icons.work_outline, "Jabatan",
+                  userData['jabatan'] ?? "Karyawan"),
+              _buildInfoItem(
+                  Icons.location_on, "Alamat", userData['alamat'] ?? "-"),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -115,6 +157,8 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
           (val) {
             setState(() => _isDarkModeEnabled = val);
             _saveSetting('dark_mode_enabled', val);
+            // Update global theme
+            themeNotifier.value = val ? ThemeMode.dark : ThemeMode.light;
           },
         ),
         _buildSettingToggle(
@@ -180,24 +224,17 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
   }
 
   void _showChangePasswordDialog() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return;
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Text("Ganti Password",
             style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-                decoration: InputDecoration(
-                    hintText: "Password Lama",
-                    hintStyle: GoogleFonts.poppins(fontSize: 14))),
-            const SizedBox(height: 10),
-            TextField(
-                decoration: InputDecoration(
-                    hintText: "Password Baru",
-                    hintStyle: GoogleFonts.poppins(fontSize: 14))),
-          ],
+        content: Text(
+          "Kami akan mengirimkan link pengaturan ulang kata sandi ke email Anda: \n\n${user.email}",
+          style: GoogleFonts.poppins(fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -205,12 +242,28 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
               child: const Text("Batal")),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: kPrimaryColor),
-            onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Berhasil mengubah password!")));
+            onPressed: () async {
+              try {
+                await FirebaseAuth.instance
+                    .sendPasswordResetEmail(email: user.email!);
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            "Link reset password telah dikirim ke email!")),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("Gagal mengirim email: $e")),
+                  );
+                }
+              }
             },
-            child: const Text("Simpan", style: TextStyle(color: Colors.white)),
+            child: const Text("Kirim Email",
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),

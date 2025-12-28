@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mywaguri/Utils/constants.dart';
@@ -12,29 +14,82 @@ class RegisterPage extends StatefulWidget {
 
 class _RegisterPageState extends State<RegisterPage> {
   bool _obscureText = true;
+  bool _isLoading = false;
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
 
-  void _handleRegister() {
-    if (_nameController.text.isEmpty ||
-        _emailController.text.isEmpty ||
-        _passwordController.text.isEmpty) {
+  Future<void> _handleRegister() async {
+    String name = _nameController.text.trim();
+    String email = _emailController.text.trim();
+    String phone = _phoneController.text.trim();
+    String password = _passwordController.text.trim();
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Lengkapi semua data pendaftaran')),
       );
       return;
     }
 
-    // Simulasi Pendaftaran Berhasil
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Pendaftaran berhasil! Silakan login.')),
-    );
+    setState(() => _isLoading = true);
 
-    Future.delayed(const Duration(seconds: 1), () {
-      Navigator.pop(context);
-    });
+    try {
+      // 1. Buat user di Firebase Auth
+      UserCredential userCredential =
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      // 2. Update profile (Display Name)
+      await userCredential.user?.updateDisplayName(name);
+
+      // 3. Simpan data tambahan ke Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .set({
+        'uid': userCredential.user!.uid,
+        'nama': name,
+        'email': email,
+        'phone': phone,
+        'jabatan': 'Karyawan', // Default jabatan
+        'alamat': '-', // Default alamat
+        'created_at': FieldValue.serverTimestamp(),
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pendaftaran berhasil!')),
+        );
+        Navigator.pop(context); // Kembali ke login
+      }
+    } on FirebaseAuthException catch (e) {
+      String message = "Terjadi kesalahan pendaftaran";
+      if (e.code == 'email-already-in-use') {
+        message = "Email sudah terdaftar";
+      } else if (e.code == 'weak-password') {
+        message = "Kata sandi terlalu lemah";
+      } else if (e.code == 'invalid-email') {
+        message = "Format email tidak valid";
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -130,18 +185,20 @@ class _RegisterPageState extends State<RegisterPage> {
                       ],
                     ),
                     child: ElevatedButton(
-                      onPressed: _handleRegister,
+                      onPressed: _isLoading ? null : _handleRegister,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: Text('Daftar Sekarang',
-                          style: GoogleFonts.poppins(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white)),
+                      child: _isLoading
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : Text('Daftar Sekarang',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white)),
                     ),
                   ),
                   const SizedBox(height: 30),

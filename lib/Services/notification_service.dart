@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 import 'package:mywaguri/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
@@ -97,6 +98,13 @@ class NotificationService {
 
   static Future<void> showLocalNotification(String title, String body) async {
     if (kIsWeb) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final isEnabled = prefs.getBool('notif_enabled') ?? true;
+    if (!isEnabled) {
+      print("Notifikasi dibatalkan karena dinonaktifkan di pengaturan.");
+      return;
+    }
 
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(

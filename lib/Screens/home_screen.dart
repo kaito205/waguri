@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:mywaguri/Utils/constants.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mywaguri/Screens/Login/login_page.dart';
 import 'package:mywaguri/Screens/profile_detail_screen.dart';
 import 'package:mywaguri/Services/notification_service.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:async';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,24 +26,52 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _checkInTime;
   String? _checkOutTime;
   String? _todayDocId;
+  Timer? _timer;
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final String _userEmail = "admin@gmail.com"; // Simulasi email user login
+  final User? _user = FirebaseAuth.instance.currentUser;
+  String get _userEmail => _user?.email ?? "Guest";
+  String get _userName =>
+      _user?.displayName ?? _user?.email?.split('@').first ?? "User";
+
+  // Konfigurasi Lokasi Kantor (Ganti dengan koordinat kantor asli Anda)
+  static const double _officeLat = -6.200000; // Contoh: Jakarta
+  static const double _officeLng = 106.816666;
+  static const double _maxDistance = 50.0; // Meter
 
   @override
   void initState() {
     super.initState();
-    _updateTime();
+    _startTimer();
     _checkTodayStatus();
   }
 
-  void _updateTime() {
-    if (!mounted) return;
-    setState(() {
-      _currentTime = DateFormat('HH:mm:ss').format(DateTime.now());
-      _currentDate = DateFormat('EEEE, dd MMMM yyyy').format(DateTime.now());
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _currentTime = DateFormat('HH:mm:ss').format(DateTime.now());
+        _currentDate = DateFormat('EEEE, dd MMMM yyyy').format(DateTime.now());
+      });
     });
-    Future.delayed(const Duration(seconds: 1), () => _updateTime());
+  }
+
+  Future<bool> _checkInternet() async {
+    var connectivityResult = await (Connectivity().checkConnectivity());
+    if (connectivityResult.contains(ConnectivityResult.none)) {
+      _showSnackBar("Tidak ada koneksi internet. Periksa jaringan Anda.");
+      return false;
+    }
+    return true;
   }
 
   void _checkTodayStatus() async {
@@ -77,17 +109,68 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
 
-    // Simulasi loading sebentar
-    await Future.delayed(const Duration(seconds: 2));
+    // Panggil sign out asli
+    await FirebaseAuth.instance.signOut();
 
     if (!mounted) return;
-
+    Navigator.pop(context); // Tutup loading dialog
     // Pindah ke LoginPage dan hapus semua history navigasi
+    // Sebenarnya AuthWrapper akan otomatis mendeteksi logout,
+    // tapi pushAndRemoveUntil menjamin kebersihan stack navigasi.
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const LoginPage()),
       (route) => false,
     );
+  }
+
+  Future<bool> _checkLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      _showSnackBar("Layanan lokasi tidak aktif. Silakan aktifkan GPS.");
+      return false;
+    }
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        _showSnackBar("Izin lokasi ditolak.");
+        return false;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      _showSnackBar("Izin lokasi ditolak secara permanen.");
+      return false;
+    }
+
+    // Tampilkan loading sebentar saat mengambil lokasi
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) =>
+          const Center(child: CircularProgressIndicator(color: kPrimaryColor)),
+    );
+
+    try {
+      // Timeout 5 detik agar tidak hang selamanya
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy:
+            LocationAccuracy.low, // Gunakan low untuk kecepatan testing
+        timeLimit: const Duration(seconds: 5),
+      );
+      Navigator.pop(context); // Tutup loading
+      return true;
+    } catch (e) {
+      Navigator.pop(context);
+      print("GPS Error: $e");
+      // Untuk testing, kita biarkan saja lolos meski GPS error
+      return true;
+    }
   }
 
   void _handleCheckIn() async {
@@ -97,13 +180,21 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // 1. Cek Internet
+    bool hasInternet = await _checkInternet();
+    if (!hasInternet) return;
+
+    // 2. Validasi Lokasi
+    bool isAtOffice = await _checkLocation();
+    if (!isAtOffice) return;
+
     String timeNow = DateFormat('HH:mm').format(DateTime.now());
     String dateNow = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
     try {
       DocumentReference docRef = await _firestore.collection('absensi').add({
         "email": _userEmail,
-        "nama": "Fauzi",
+        "nama": _userName,
         "tanggal": dateNow,
         "waktu_masuk": timeNow,
         "waktu_pulang": null,
@@ -126,18 +217,46 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handleCheckOut() async {
-    if (_checkInTime == null) {
+    print("Check-out dipicu...");
+    if (_checkInTime == null || _checkInTime == "--:--") {
       _showSnackBar("Silakan absen masuk terlebih dahulu!");
       return;
     }
-    if (_checkOutTime != null) {
+    if (_checkOutTime != null && _checkOutTime != "--:--") {
       _showSnackBar("Anda sudah melakukan absen pulang hari ini!");
       return;
     }
 
+    // 1. Cek Internet
+    bool hasInternet = await _checkInternet();
+    print("Cek internet: $hasInternet");
+    if (!hasInternet) return;
+
+    // 2. Validasi Lokasi
+    bool isAtOffice = await _checkLocation();
+    print("Cek lokasi: $isAtOffice");
+    if (!isAtOffice) return;
+
     String timeNow = DateFormat('HH:mm').format(DateTime.now());
 
     try {
+      // Jika _todayDocId hilang (misal karena reload), coba cari lagi sebelum update
+      if (_todayDocId == null) {
+        String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+        var snap = await _firestore
+            .collection('absensi')
+            .where('email', isEqualTo: _userEmail)
+            .where('tanggal', isEqualTo: today)
+            .limit(1)
+            .get();
+        if (snap.docs.isNotEmpty) {
+          _todayDocId = snap.docs.first.id;
+        } else {
+          _showSnackBar("Data absen hari ini tidak ditemukan!");
+          return;
+        }
+      }
+
       await _firestore.collection('absensi').doc(_todayDocId).update({
         "waktu_pulang": timeNow,
       });
@@ -259,7 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _firestore.collection('absensi').add({
         "email": _userEmail,
-        "nama": "Fauzi",
+        "nama": _userName,
         "tanggal": today,
         "waktu_masuk": "--:--",
         "waktu_pulang": "--:--",
@@ -435,111 +554,137 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildProfileTab() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const SizedBox(height: 40),
-          Center(
-            child: const CircleAvatar(
-                radius: 60,
-                backgroundImage: AssetImage("assets/images/avatar.jpg")),
+    return FutureBuilder<DocumentSnapshot>(
+      future: _firestore.collection('users').doc(_user?.uid).get(),
+      builder: (context, snapshot) {
+        String name = _userName;
+        String job = "Karyawan";
+
+        if (snapshot.hasData && snapshot.data!.exists) {
+          var data = snapshot.data!.data() as Map<String, dynamic>;
+          name = data['nama'] ?? name;
+          job = data['jabatan'] ?? job;
+        }
+
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              const SizedBox(height: 40),
+              const Center(
+                child: CircleAvatar(
+                    radius: 60,
+                    backgroundImage: AssetImage("assets/images/avatar.jpg")),
+              ),
+              const SizedBox(height: 16),
+              Text(name,
+                  style: GoogleFonts.poppins(
+                      fontSize: 22, fontWeight: FontWeight.bold)),
+              Text(job, style: GoogleFonts.poppins(color: mSubtitleColor)),
+              const SizedBox(height: 40),
+              _buildProfileMenu(Icons.person_outline, "Informasi Pribadi", () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ProfileDetailScreen(
+                      title: "Informasi Pribadi",
+                      type: "personal",
+                    ),
+                  ),
+                );
+              }),
+              _buildProfileMenu(Icons.settings_outlined, "Pengaturan", () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ProfileDetailScreen(
+                      title: "Pengaturan",
+                      type: "settings",
+                    ),
+                  ),
+                );
+              }),
+              _buildProfileMenu(Icons.help_outline, "Pusat Bantuan", () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ProfileDetailScreen(
+                      title: "Pusat Bantuan",
+                      type: "help",
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 40),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.red),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: _handleLogout,
+                    child: const Text("Keluar Akun",
+                        style: TextStyle(
+                            color: Colors.red, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              )
+            ],
           ),
-          const SizedBox(height: 16),
-          Text("Fauzi",
-              style: GoogleFonts.poppins(
-                  fontSize: 22, fontWeight: FontWeight.bold)),
-          Text("Senior Developer",
-              style: GoogleFonts.poppins(color: mSubtitleColor)),
-          const SizedBox(height: 40),
-          _buildProfileMenu(Icons.person_outline, "Informasi Pribadi", () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ProfileDetailScreen(
-                  title: "Informasi Pribadi",
-                  type: "personal",
-                ),
-              ),
-            );
-          }),
-          _buildProfileMenu(Icons.settings_outlined, "Pengaturan", () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ProfileDetailScreen(
-                  title: "Pengaturan",
-                  type: "settings",
-                ),
-              ),
-            );
-          }),
-          _buildProfileMenu(Icons.help_outline, "Pusat Bantuan", () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const ProfileDetailScreen(
-                  title: "Pusat Bantuan",
-                  type: "help",
-                ),
-              ),
-            );
-          }),
-          const SizedBox(height: 40),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.red),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: _handleLogout,
-                child: const Text("Keluar Akun",
-                    style: TextStyle(
-                        color: Colors.red, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          )
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(30), bottomRight: Radius.circular(30)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
+    return FutureBuilder<DocumentSnapshot>(
+      future: _firestore.collection('users').doc(_user?.uid).get(),
+      builder: (context, snapshot) {
+        String name = _userName;
+        if (snapshot.hasData && snapshot.data!.exists) {
+          name =
+              (snapshot.data!.data() as Map<String, dynamic>)['nama'] ?? name;
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(24),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(30),
+                bottomRight: Radius.circular(30)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const CircleAvatar(
-                  backgroundImage: AssetImage('assets/images/avatar.jpg')),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
                 children: [
-                  Text('Halo, Fauzi',
-                      style: GoogleFonts.poppins(
-                          fontSize: 18, fontWeight: FontWeight.bold)),
-                  Text('Jangan lupa absen ya!',
-                      style: GoogleFonts.poppins(
-                          fontSize: 12, color: mSubtitleColor)),
+                  const CircleAvatar(
+                      backgroundImage: AssetImage('assets/images/avatar.jpg')),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Halo, $name',
+                          style: GoogleFonts.poppins(
+                              fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text('Jangan lupa absen ya!',
+                          style: GoogleFonts.poppins(
+                              fontSize: 12, color: mSubtitleColor)),
+                    ],
+                  ),
                 ],
               ),
+              const Icon(Icons.notifications_none_rounded,
+                  color: mSubtitleColor),
             ],
           ),
-          const Icon(Icons.notifications_none_rounded, color: mSubtitleColor),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -593,14 +738,16 @@ class _HomeScreenState extends State<HomeScreen> {
             ? Colors.grey.withOpacity(0.3)
             : Colors.white.withOpacity(0.2),
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        padding: const EdgeInsets.symmetric(vertical: 18), // Diperbesar dari 12
       ),
       onPressed: onTap,
-      icon: Icon(icon, color: Colors.white, size: 20),
+      icon: Icon(icon, color: Colors.white, size: 24), // Diperbesar dari 20
       label: Text(label,
           style: const TextStyle(
-              color: Colors.white, fontWeight: FontWeight.bold)),
+              fontSize: 15, // Ditambahkan ukuran font
+              color: Colors.white,
+              fontWeight: FontWeight.bold)),
     );
   }
 

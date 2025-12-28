@@ -1,7 +1,9 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:mywaguri/Screens/Register/register_page.dart';
 import 'package:mywaguri/Screens/home_screen.dart';
+import 'package:mywaguri/Screens/Register/register_page.dart';
 import 'package:mywaguri/Utils/constants.dart';
 import 'package:mywaguri/size_config.dart';
 
@@ -14,12 +16,13 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   bool _obscureText = true;
+  bool _isLoading = false;
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  void _handleLogin() {
-    String email = _emailController.text;
-    String password = _passwordController.text;
+  Future<void> _handleLogin() async {
+    String email = _emailController.text.trim();
+    String password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -29,18 +32,63 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    // Simulasi Login Berhasil (Bisa diganti dengan API call nanti)
-    if (email == "admin@gmail.com" && password == "admin123") {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
-    } else {
+    // Cek Internet
+    var connectivityResult = await (Connectivity().checkConnectivity());
+    if (connectivityResult.contains(ConnectivityResult.none)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text(
-                'Email atau kata sandi salah (Gunakan admin@gmail.com / admin123)')),
+            content:
+                Text('Tidak ada koneksi internet. Periksa jaringan Anda.')),
       );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      if (mounted) {
+        // Navigasi paksa ke HomeScreen dan hapus semua history tumpukan layar
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      String message = "Kesalahan [${e.code}]: ";
+      if (e.code == 'user-not-found') {
+        message += "Pengguna tidak ditemukan";
+      } else if (e.code == 'wrong-password') {
+        message += "Kata sandi salah";
+      } else if (e.code == 'invalid-email') {
+        message += "Format email tidak valid";
+      } else if (e.code == 'user-disabled') {
+        message += "Akun ini telah dinonaktifkan";
+      } else if (e.code == 'operation-not-allowed') {
+        message += "Login email belum diaktifkan di Firebase Console";
+      } else {
+        message += e.message ?? "Terjadi kesalahan";
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(message), duration: const Duration(seconds: 5)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -86,10 +134,10 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                   ),
                   const SizedBox(height: 50),
-                  _buildInputLabel('Email atau ID'),
+                  _buildInputLabel('Email'),
                   _buildTextField(
                     controller: _emailController,
-                    hint: 'Masukkan email/ID',
+                    hint: 'Masukkan email',
                     icon: Icons.alternate_email_rounded,
                   ),
                   const SizedBox(height: 24),
@@ -127,18 +175,20 @@ class _LoginPageState extends State<LoginPage> {
                       ],
                     ),
                     child: ElevatedButton(
-                      onPressed: _handleLogin,
+                      onPressed: _isLoading ? null : _handleLogin,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: Text('Masuk',
-                          style: GoogleFonts.poppins(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white)),
+                      child: _isLoading
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : Text('Masuk',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white)),
                     ),
                   ),
                   const SizedBox(height: 40),

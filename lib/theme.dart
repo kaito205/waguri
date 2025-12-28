@@ -13,6 +13,38 @@ ThemeData theme() {
   );
 }
 
+ThemeData darkTheme() {
+  return ThemeData(
+    brightness: Brightness.dark,
+    scaffoldBackgroundColor: const Color(0xFF121212),
+    appBarTheme: darkAppBarTheme(),
+    textTheme: darkTextTheme(),
+    visualDensity: VisualDensity.adaptivePlatformDensity,
+    useMaterial3: true,
+  );
+}
+
+TextTheme darkTextTheme() {
+  return const TextTheme(
+    bodyLarge: TextStyle(color: Colors.white),
+    bodyMedium: TextStyle(color: Colors.white70),
+  );
+}
+
+AppBarTheme darkAppBarTheme() {
+  return const AppBarTheme(
+    backgroundColor: Color(0xFF1E1E1E),
+    elevation: 0,
+    iconTheme: IconThemeData(color: Colors.white),
+    titleTextStyle: TextStyle(
+      color: Colors.white,
+      fontSize: 18,
+      fontWeight: FontWeight.w600,
+    ),
+    systemOverlayStyle: SystemUiOverlayStyle.light,
+  );
+}
+
 InputDecorationTheme inputDecorationTheme() {
   final outlineInputBorder = OutlineInputBorder(
     borderRadius: BorderRadius.circular(28),
